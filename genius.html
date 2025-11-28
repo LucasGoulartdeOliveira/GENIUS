@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Genius (Simon) - Sequência com Setas do Teclado</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --glass:rgba(255,255,255,0.04);
+    --up:#ef4444; --right:#f59e0b; --down:#10b981; --left:#3b82f6;
+    --accent:#fff;
+  }
+  *{box-sizing:border-box;font-family:Inter,system-ui,Arial,sans-serif}
+  body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--bg),#041024);display:flex;align-items:center;justify-content:center;color:var(--accent)}
+  .wrap{width:720px;max-width:96%;padding:24px}
+  .board{width:520px;height:520px;background:linear-gradient(180deg,#061426 0%, #071028 100%);border-radius:18px;padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 auto;box-shadow:0 12px 40px rgba(2,6,23,0.6)}
+
+  .pad{border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:24px;color:rgba(255,255,255,0.95);cursor:pointer;user-select:none;box-shadow:inset 0 -10px rgba(0,0,0,0.15)}
+  .pad.up{background:linear-gradient(180deg,var(--up),#f87171)}
+  .pad.right{background:linear-gradient(180deg,var(--right),#fbbf24)}
+  .pad.down{background:linear-gradient(180deg,var(--down),#34d399)}
+  .pad.left{background:linear-gradient(180deg,var(--left),#60a5fa)}
+  .pad.active{filter:brightness(1.25);transform:scale(1.03);box-shadow:0 12px 30px rgba(0,0,0,0.5)}
+
+  .controls{display:flex;align-items:center;justify-content:space-between;margin-top:18px}
+  .panel{display:flex;gap:10px;align-items:center}
+  .btn{padding:8px 14px;border-radius:8px;border:none;background:var(--glass);color:var(--accent);cursor:pointer}
+  .display{background:rgba(255,255,255,0.04);padding:12px 18px;border-radius:10px;text-align:center}
+  .big{font-size:18px;font-weight:700}
+  .small{font-size:12px;color:rgba(255,255,255,0.7)}
+
+  .footer{margin-top:10px;text-align:center;color:rgba(255,255,255,0.6)}
+  @media (max-width:560px){.board{width:360px;height:360px}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h2 style="text-align:center;margin:0 0 12px 0">Genius — Sequência com Setas do Teclado</h2>
+    <div class="board" id="board">
+      <div class="pad up" data-key="ArrowUp">⬆<br><small>Up</small></div>
+      <div class="pad right" data-key="ArrowRight">➡<br><small>Right</small></div>
+      <div class="pad left" data-key="ArrowLeft">⬅<br><small>Left</small></div>
+      <div class="pad down" data-key="ArrowDown">⬇<br><small>Down</small></div>
+    </div>
+
+    <div class="controls">
+      <div class="panel">
+        <button class="btn" id="startBtn">Iniciar</button>
+        <button class="btn" id="strictBtn">Modo Rígido: OFF</button>
+        <button class="btn" id="resetBtn">Resetar</button>
+      </div>
+      <div class="display">
+        <div class="big">Rodada: <span id="round">0</span></div>
+        <div class="small">Sua vez aparece quando a sequência termina</div>
+      </div>
+    </div>
+
+    <div class="footer">Use as setas do teclado (↑ → ↓ ←) ou clique nas áreas coloridas para reproduzir a sequência.</div>
+  </div>
+
+<script>
+(() => {
+  const pads = Array.from(document.querySelectorAll('.pad'));
+  const startBtn = document.getElementById('startBtn');
+  const roundSpan = document.getElementById('round');
+  const strictBtn = document.getElementById('strictBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  // mapping keys to pads
+  const keyToPad = {
+    'ArrowUp': document.querySelector('.pad.up'),
+    'ArrowRight': document.querySelector('.pad.right'),
+    'ArrowDown': document.querySelector('.pad.down'),
+    'ArrowLeft': document.querySelector('.pad.left')
+  };
+
+  // game state
+  let seq = [];
+  let playerIndex = 0;
+  let inPlayback = false;
+  let strict = false;
+
+  // audio: simple tones with WebAudio
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = AudioCtx ? new AudioCtx() : null;
+  const tones = { 'ArrowUp': 440, 'ArrowRight': 660, 'ArrowDown': 880, 'ArrowLeft': 550 };
+
+  function playTone(freq, duration = 300){
+    if(!ctx) return;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = freq;
+    g.gain.value = 0.001;
+    o.connect(g); g.connect(ctx.destination);
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (duration/1000));
+    setTimeout(()=>{ try{ o.stop(); }catch(e){} }, duration+20);
+  }
+
+  function flashPad(pad, dur = 400){
+    pad.classList.add('active');
+    const key = pad.dataset.key;
+    if(tones[key]) playTone(tones[key], dur);
+    setTimeout(()=> pad.classList.remove('active'), dur - 40);
+  }
+
+  function nextStep(){
+    // add random arrow to sequence
+    const keys = Object.keys(keyToPad);
+    seq.push(keys[Math.floor(Math.random()*keys.length)]);
+    roundSpan.innerText = seq.length;
+    playbackSequence();
+  }
+
+  async function playbackSequence(){
+    inPlayback = true; playerIndex = 0;
+    await sleep(300);
+    for(let i=0;i<seq.length;i++){
+      const key = seq[i];
+      const pad = keyToPad[key];
+      flashPad(pad, 500);
+      await sleep(600);
+    }
+    inPlayback = false;
+  }
+
+  function sleep(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+  function handleUserInput(key){
+    if(inPlayback) return; // ignore during playback
+    if(!keyToPad[key]) return;
+
+    const expected = seq[playerIndex];
+    flashPad(keyToPad[key], 200);
+
+    if(key === expected){
+      playerIndex++;
+      if(playerIndex === seq.length){
+        // round success
+        setTimeout(()=> nextStep(), 700);
+      }
+    } else {
+      // mistake
+      // visual feedback
+      document.body.style.background = 'linear-gradient(120deg,#4b0000,#0f1724)';
+      setTimeout(()=> document.body.style.background = '', 350);
+      if(strict){
+        // reset to start
+        seq = [];
+        roundSpan.innerText = 0;
+        setTimeout(()=> startGame(), 700);
+      } else {
+        // replay same sequence for retry
+        playerIndex = 0;
+        setTimeout(()=> playbackSequence(), 800);
+      }
+    }
+  }
+
+  function startGame(){
+    seq = [];
+    playerIndex = 0;
+    nextStep();
+  }
+
+  // attach event listeners
+  pads.forEach(p=>{
+    p.addEventListener('click', ()=>{ handleUserInput(p.dataset.key); });
+  });
+
+  window.addEventListener('keydown', (e)=>{
+    // prevent arrow keys from scrolling
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+    handleUserInput(e.key);
+  });
+
+  startBtn.addEventListener('click', ()=>{
+    // resume audio context if needed
+    if(ctx && ctx.state === 'suspended') ctx.resume();
+    startGame();
+  });
+  strictBtn.addEventListener('click', ()=>{ strict = !strict; strictBtn.innerText = `Modo Rígido: ${strict? 'ON' : 'OFF'}`; });
+  resetBtn.addEventListener('click', ()=>{ seq = []; playerIndex = 0; roundSpan.innerText = 0; inPlayback = false; });
+
+})();
+</script>
+</body>
+</html>
